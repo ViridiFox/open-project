@@ -73,10 +73,15 @@ fn main() -> color_eyre::Result<()> {
                 .expect("expected valid skim options");
 
             let entry_receiver = send_expanded_entries(entries.clone());
-            let selected = Skim::run_with(&skim_options, Some(entry_receiver))
-                .map(|out| out.selected_items)
-                .unwrap_or_default();
-            let selected = selected
+            let output = Skim::run_with(&skim_options, Some(entry_receiver))
+                .ok_or(eyre!("skim produced an error"))?;
+
+            if output.is_abort {
+                std::process::exit(1);
+            }
+
+            let selected = output
+                .selected_items
                 .iter()
                 .map(|item| {
                     (**item)
@@ -152,10 +157,15 @@ fn main() -> color_eyre::Result<()> {
                     .expect("expected valid skim options");
 
                 let entry_receiver = send_entries(entries.clone());
-                let selected = Skim::run_with(&skim_options, Some(entry_receiver))
-                    .map(|out| out.selected_items)
-                    .unwrap_or_default();
-                let selected = selected.iter().map(|item| {
+
+                let output = Skim::run_with(&skim_options, Some(entry_receiver))
+                    .ok_or(eyre!("skim produced an error"))?;
+
+                if output.is_abort {
+                    std::process::exit(1);
+                }
+
+                let selected = output.selected_items.iter().map(|item| {
                     (**item)
                         .as_any()
                         .downcast_ref::<Entry>()
