@@ -103,14 +103,23 @@ fn main() -> color_eyre::Result<()> {
                 Entry::PathWithlayout { path, layout } => (path, layout.as_str()),
             };
 
-            let status = Command::new("wezterm")
+            let mut command = Command::new("wezterm");
+            command
+                .current_dir(path)
                 .args(["cli", "spawn", "--cwd"])
                 .arg(path)
                 .args(["zellij", "-l"])
-                .arg(layout)
-                .current_dir(path)
-                .spawn()?
-                .wait()?;
+                .arg(layout);
+
+            if let Some(name) = path.file_name() {
+                let sessions = Command::new("zellij").arg("ls").output()?;
+                let sessions = String::from_utf8(sessions.stdout)?;
+                if !sessions.lines().any(|session_name| session_name == name) {
+                    command.arg("-s").arg(name);
+                }
+            }
+
+            let status = command.spawn()?.wait()?;
 
             if !status.success() {
                 eprintln!("failed to spawn tab: {status}");
