@@ -12,6 +12,14 @@ use clap::{error::ErrorKind, Parser};
 use color_eyre::eyre::eyre;
 use serde::{Deserialize, Serialize};
 use skim::prelude::*;
+use winnow::{
+    ascii::{alphanumeric1, line_ending, multispace1},
+    combinator::{alt, delimited, opt, repeat, separated, success},
+    error::StrContext,
+    prelude::*,
+    token::tag,
+    Parser as _,
+};
 
 const DATA_FILENAME: &str = "projects.json";
 const DEFAULT_LAYOUT: &str = "xplr";
@@ -112,9 +120,28 @@ fn main() -> color_eyre::Result<()> {
                 .arg(layout);
 
             if let Some(name) = path.file_name() {
-                let sessions = Command::new("zellij").arg("ls").output()?;
-                let sessions = String::from_utf8(sessions.stdout)?;
-                if !sessions.lines().any(|session_name| session_name == name) {
+                let sessions = Command::new("zellij").args(["ls", "-n"]).output()?;
+                let mut sessions = String::from_utf8(sessions.stdout)?;
+
+                let sessions = parse_zellij_ls.parse(&mut sessions).map_err(|err| {
+                    eyre!(
+                        "offset: {}\ncontext: {:?}\n{err}",
+                        err.offset(),
+                        err.inner().context().collect::<Vec<_>>()
+                    )
+                })?;
+                if let Some(existing_sesion) = sessions
+                    .into_iter()
+                    .find(|session| session.name == name.to_string_lossy())
+                {
+                    if existing_sesion.exited {
+                        Command::new("zellij")
+                            .arg("delete-session")
+                            .arg(name)
+                            .status()?;
+                        command.arg("-s").arg(name);
+                    }
+                } else {
                     command.arg("-s").arg(name);
                 }
             }
@@ -276,4 +303,63 @@ fn send_expanded_entries(entries: VecDeque<Entry>) -> SkimItemReceiver {
     });
 
     entry_receiver
+}
+
+#[derive(Debug)]
+struct ZellijSession {
+    name: String,
+    exited: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Status {
+    Exited,
+    Else,
+}
+
+fn parse_zellij_ls(input: &mut &str) -> PResult<Vec<ZellijSession>> {
+    fn session_name(input: &mut &str) -> PResult<String> {
+        repeat(1.., alt((alphanumeric1, tag("-"))))
+            .map(|text: Vec<&str>| text.join(""))
+            .context(StrContext::Label("session name"))
+            .parse_next(input)
+    }
+
+    fn status(input: &mut &str) -> PResult<Status> {
+        alt((
+            "EXITED - attach to resurrect".map(|_| Status::Exited),
+            "current".map(|_| Status::Else),
+            success(Status::Else),
+        ))
+        .context(StrContext::Label("session status"))
+        .parse_next(input)
+    }
+
+    (
+        separated(
+            ..,
+            (
+                session_name,
+                ' ',
+                delimited::<_, _, String, _, _, _, _, _>(
+                    '[',
+                    repeat(.., alt((alphanumeric1, multispace1))),
+                    ']',
+                ),
+                opt((' ', delimited('(', status, ')'))),
+            )
+                .map(|(name, _, _, opt_status)| ZellijSession {
+                    name,
+                    exited: opt_status
+                        .map(|(_, status)| status == Status::Exited)
+                        .unwrap_or(false),
+                })
+                .context(StrContext::Label("session entry")),
+            line_ending,
+        ),
+        opt(line_ending),
+    )
+        .map(|res| res.0)
+        .context(StrContext::Label("session list"))
+        .parse_next(input)
 }
