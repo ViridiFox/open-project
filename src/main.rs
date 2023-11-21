@@ -22,7 +22,7 @@ use winnow::{
 };
 
 const DATA_FILENAME: &str = "projects.json";
-const DEFAULT_LAYOUT: &str = "xplr";
+const DEFAULT_LAYOUT: &str = "dev-default";
 
 /// Cli to open projects easily easily without needing to care for the working directory
 /// currently: open a new wezterm tab and open `zellij -l=<layout>` inside it
