@@ -13,7 +13,7 @@ use color_eyre::eyre::eyre;
 use serde::{Deserialize, Serialize};
 use skim::prelude::*;
 use winnow::{
-    ascii::{alphanumeric1, line_ending, multispace0, multispace1},
+    ascii::{alphanumeric1, line_ending, multispace1, space0},
     combinator::{alt, delimited, opt, repeat, separated, success},
     error::StrContext,
     prelude::*,
@@ -346,7 +346,7 @@ fn parse_zellij_ls(input: &mut &str) -> PResult<Vec<ZellijSession>> {
                     repeat(.., alt((alphanumeric1, multispace1))),
                     ']',
                 ),
-                multispace0,
+                space0,
                 opt(delimited('(', status, ')')),
             )
                 .map(|(name, _, _, _, opt_status)| ZellijSession {
