@@ -20,6 +20,4 @@ shellexpand = { version = "3.1.0", default-features = false, features = [
     "full",
 ] }
 winnow = "0.6.1"
-
-# TODO: replace skim somehow
-skim = "0.10.4"
+dialoguer = { version = "0.11.0", features = ["fuzzy-select"] }
