@@ -14,10 +14,10 @@ use serde::{Deserialize, Serialize};
 use skim::prelude::*;
 use winnow::{
     ascii::{alphanumeric1, line_ending, multispace1, space0},
-    combinator::{alt, delimited, opt, repeat, separated, success},
+    combinator::{alt, delimited, empty, opt, repeat, separated},
     error::StrContext,
     prelude::*,
-    token::tag,
+    token::literal,
     Parser as _,
 };
 
@@ -319,7 +319,7 @@ enum Status {
 
 fn parse_zellij_ls(input: &mut &str) -> PResult<Vec<ZellijSession>> {
     fn session_name(input: &mut &str) -> PResult<String> {
-        repeat(1.., alt((alphanumeric1, tag("-"))))
+        repeat(1.., alt((alphanumeric1, literal("-"), literal("_"))))
             .map(|text: Vec<&str>| text.join(""))
             .context(StrContext::Label("session name"))
             .parse_next(input)
@@ -329,7 +329,7 @@ fn parse_zellij_ls(input: &mut &str) -> PResult<Vec<ZellijSession>> {
         alt((
             "EXITED - attach to resurrect".map(|_| Status::Exited),
             "current".map(|_| Status::Else),
-            success(Status::Else),
+            empty.value(Status::Else),
         ))
         .context(StrContext::Label("session status"))
         .parse_next(input)
