@@ -4,15 +4,12 @@ use clap::{error::ErrorKind, Parser};
 use color_eyre::eyre::eyre;
 use dialoguer::{theme::ColorfulTheme, FuzzySelect, MultiSelect};
 use entry::Entry;
-use winnow::Parser as _;
 
-use crate::{entry::generate_expanded_entries, session::parse_zellij_ls};
+use crate::entry::generate_expanded_entries;
 
 mod entry;
-mod session;
 
 const DATA_FILENAME: &str = "projects.json";
-const DEFAULT_LAYOUT: &str = "dev-default";
 
 /// Cli to open projects easily easily without needing to care for the working directory
 /// currently: open a new wezterm tab and open `zellij -l=<layout>` inside it
@@ -22,9 +19,6 @@ enum Cli {
     List,
     Add {
         path: PathBuf,
-
-        /// layout to pass to zellij -l=<layout> when opening this path
-        layout: Option<String>,
 
         /// add it to the start of the list, giving it a higher priority
         #[clap(short, long)]
@@ -75,45 +69,21 @@ fn main() -> color_eyre::Result<()> {
 
             let selected_entry = &entries[selection];
 
-            let (path, layout) = match selected_entry {
-                Entry::JustPath(path) => (path, DEFAULT_LAYOUT),
-                Entry::PathWithlayout { path, layout } => (path, layout.as_str()),
-            };
+            let path = &selected_entry.0;
 
             let mut command = Command::new("wezterm");
+            // do session name based on last part of path
             command
                 .current_dir(path)
                 .args(["cli", "spawn", "--cwd"])
                 .arg(path)
-                .args(["zellij", "-l"])
-                .arg(layout);
+                .args(["tmux", "new"]);
 
             if let Some(name) = path.file_name() {
-                let sessions = Command::new("zellij").args(["ls", "-n"]).output()?;
-                let sessions = String::from_utf8(sessions.stdout)?;
-
-                let sessions = parse_zellij_ls.parse(&sessions).map_err(|err| {
-                    eyre!(
-                        "offset: {}\ncontext: {:?}\n{err}",
-                        err.offset(),
-                        err.inner().context().collect::<Vec<_>>()
-                    )
-                })?;
-                if let Some(existing_sesion) = sessions
-                    .into_iter()
-                    .find(|session| session.name == name.to_string_lossy())
-                {
-                    if existing_sesion.exited {
-                        Command::new("zellij")
-                            .arg("delete-session")
-                            .arg(name)
-                            .status()?;
-                        command.arg("-s").arg(name);
-                    }
-                } else {
-                    command.arg("-s").arg(name);
-                }
+                command.arg("-s").arg(name);
             }
+
+            command.arg(&std::env::var("SHELL").expect("there should be 'SHELL' set"));
 
             let status = command.spawn()?.wait()?;
 
@@ -127,24 +97,15 @@ fn main() -> color_eyre::Result<()> {
             println!("{}", serde_json::to_string_pretty(&entries)?);
             Ok(())
         }
-        Cli::Add {
-            path,
-            layout,
-            prepend,
-        } => {
+        Cli::Add { path, prepend } => {
             let path = PathBuf::from_str(&shellexpand::tilde(
                 path.to_str().ok_or(eyre!("expected valid utf-8 path"))?,
             ))?;
-            let new_entry = if let Some(layout) = layout {
-                Entry::PathWithlayout { path, layout }
-            } else {
-                Entry::JustPath(path)
-            };
 
             if prepend {
-                entries.push_front(new_entry);
+                entries.push_front(Entry(path));
             } else {
-                entries.push_back(new_entry);
+                entries.push_back(Entry(path));
             }
 
             serde_json::to_writer_pretty(File::create(&entries_filepath)?, &entries)?;
@@ -153,7 +114,7 @@ fn main() -> color_eyre::Result<()> {
         }
         Cli::Remove { path } => {
             if let Some(path) = path {
-                entries.retain(|entry| *entry.get_path() != path);
+                entries.retain(|entry| *entry.0 != path);
             } else {
                 let mut selected_entries = MultiSelect::with_theme(&ColorfulTheme::default())
                     .items(entries.make_contiguous())
