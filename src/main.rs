@@ -83,8 +83,6 @@ fn main() -> color_eyre::Result<()> {
                 command.arg("-s").arg(name);
             }
 
-            command.arg(&std::env::var("SHELL").expect("there should be 'SHELL' set"));
-
             let status = command.spawn()?.wait()?;
 
             if !status.success() {
