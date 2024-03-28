@@ -114,6 +114,7 @@ fn main() -> color_eyre::Result<()> {
             for entry in &entries {
                 writeln!(chooser_stdin, "{}", entry.0)?;
             }
+            drop(chooser_stdin);
 
             let selected_str = String::from_utf8(chooser.wait_with_output()?.stdout)?;
             let selected_str = selected_str.trim();
