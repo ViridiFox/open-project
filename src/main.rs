@@ -1,4 +1,12 @@
-use std::{collections::VecDeque, fs::File, path::PathBuf, process::Command, str::FromStr};
+use std::{
+    collections::{HashMap, VecDeque},
+    env,
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    process::{Command, Stdio},
+    str::FromStr,
+};
 
 use clap::{error::ErrorKind, Parser};
 use color_eyre::eyre::eyre;
@@ -15,7 +23,14 @@ const DATA_FILENAME: &str = "projects.json";
 /// currently: open a new wezterm tab and open `zellij -l=<layout>` inside it
 #[derive(Parser, Debug)]
 enum Cli {
-    Open,
+    Open {
+        #[clap(short, long)]
+        new_window: bool,
+    },
+    OpenGui {
+        #[clap(short, long)]
+        new_window: bool,
+    },
     List,
     Add {
         path: PathBuf,
@@ -35,7 +50,7 @@ fn main() -> color_eyre::Result<()> {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(err) => match err.kind() {
-            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => Cli::Open,
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => Cli::Open { new_window: false },
             _ => {
                 eprintln!("{err}");
                 std::process::exit(1);
@@ -59,7 +74,7 @@ fn main() -> color_eyre::Result<()> {
     let mut entries: VecDeque<Entry> = serde_json::from_reader(File::open(&entries_filepath)?)?;
 
     match cli {
-        Cli::Open => {
+        Cli::Open { new_window } => {
             let entries = generate_expanded_entries(entries)?;
 
             let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
@@ -69,25 +84,49 @@ fn main() -> color_eyre::Result<()> {
 
             let selected_entry = &entries[selection];
 
-            let path = &selected_entry.0;
+            open_path_in_tab(&selected_entry.0, new_window)?;
 
-            let mut command = Command::new("wezterm");
-            // do session name based on last part of path
-            command
-                .current_dir(path)
-                .args(["cli", "spawn", "--cwd"])
-                .arg(path)
-                .args(["tmux", "new"]);
+            Ok(())
+        }
+        Cli::OpenGui { new_window } => {
+            let entries: HashMap<String, Entry> = generate_expanded_entries(entries)?
+                .into_iter()
+                .map(|entry| (entry.to_string(), entry))
+                .collect();
 
-            if let Some(name) = path.file_name() {
-                command.arg("-s").arg(name);
+            let mut chooser = if cfg!(target_os = "linux") {
+                let mut rofi = Command::new(format!("{}/.config/rofi/rofi.sh", env::var("HOME")?));
+                rofi.arg("-dmenu");
+                rofi
+            } else if cfg!(target_os = "macos") {
+                Command::new("choose")
+            } else {
+                panic!("unsupported os");
+            };
+
+            let mut chooser = chooser.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+
+            let mut chooser_stdin = chooser
+                .stdin
+                .take()
+                .expect("should be able to take stdin of rofi");
+
+            for entry in &entries {
+                writeln!(chooser_stdin, "{}", entry.0)?;
             }
 
-            let status = command.spawn()?.wait()?;
+            let selected_str = String::from_utf8(chooser.wait_with_output()?.stdout)?;
+            let selected_str = selected_str.trim();
 
-            if !status.success() {
-                eprintln!("failed to spawn tab: {status}");
+            if selected_str.is_empty() {
+                std::process::exit(1);
             }
+
+            let selected_entry = entries
+                .get(selected_str)
+                .ok_or(eyre!("unknown entry (`{selected_str}`) got selected"))?;
+
+            open_path_in_tab(&selected_entry.0, new_window)?;
 
             Ok(())
         }
@@ -130,4 +169,27 @@ fn main() -> color_eyre::Result<()> {
             Ok(())
         }
     }
+}
+
+fn open_path_in_tab(path: &PathBuf, new_window: bool) -> Result<(), color_eyre::eyre::Error> {
+    let mut command = Command::new("wezterm");
+    command
+        .current_dir(path)
+        .args(["cli", "spawn", "--cwd"])
+        .arg(path);
+
+    if new_window {
+        command.arg("--new-window");
+    }
+    command.args(["tmux", "new"]);
+
+    if let Some(name) = path.file_name() {
+        command.arg("-s").arg(name);
+    }
+    let status = command.spawn()?.wait()?;
+    if !status.success() {
+        eprintln!("failed to spawn tab: {status}");
+    };
+
+    Ok(())
 }
