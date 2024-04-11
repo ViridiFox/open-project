@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, VecDeque},
-    env,
     fs::File,
     io::Write,
     path::PathBuf,
@@ -95,16 +94,24 @@ fn main() -> color_eyre::Result<()> {
                 .collect();
 
             let mut chooser = if cfg!(target_os = "linux") {
-                let mut rofi = Command::new(format!("{}/.config/rofi/rofi.sh", env::var("HOME")?));
-                rofi.arg("-dmenu");
-                rofi
+                let mut anyrun = Command::new("anyrun");
+                anyrun.args([
+                    "--plugins",
+                    "libstdin.so",
+                    "--show-results-immediately",
+                    "true",
+                ]);
+                anyrun
             } else if cfg!(target_os = "macos") {
                 Command::new("choose")
             } else {
                 panic!("unsupported os");
             };
 
-            let mut chooser = chooser.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+            let mut chooser = chooser
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()?;
 
             let mut chooser_stdin = chooser
                 .stdin
