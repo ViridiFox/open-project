@@ -8,7 +8,7 @@ use std::{
 };
 
 use clap::{error::ErrorKind, Parser};
-use color_eyre::eyre::eyre;
+use color_eyre::eyre::{eyre, Context};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect, MultiSelect};
 use entry::Entry;
 
@@ -83,7 +83,7 @@ fn main() -> color_eyre::Result<()> {
 
             let selected_entry = &entries[selection];
 
-            open_path_in_tab(&selected_entry.0, new_window)?;
+            wezterm_open_path_in_tab(&selected_entry.0, new_window)?;
 
             Ok(())
         }
@@ -134,7 +134,7 @@ fn main() -> color_eyre::Result<()> {
                 .get(selected_str)
                 .ok_or(eyre!("unknown entry (`{selected_str}`) got selected"))?;
 
-            open_path_in_tab(&selected_entry.0, new_window)?;
+            wezterm_open_path_in_tab(&selected_entry.0, new_window)?;
 
             Ok(())
         }
@@ -179,7 +179,7 @@ fn main() -> color_eyre::Result<()> {
     }
 }
 
-fn open_path_in_tab(path: &PathBuf, new_window: bool) -> Result<(), color_eyre::eyre::Error> {
+fn wezterm_open_path_in_tab(path: &PathBuf, new_window: bool) -> color_eyre::Result<()> {
     let mut command = Command::new("wezterm");
     command
         .current_dir(path)
@@ -189,15 +189,32 @@ fn open_path_in_tab(path: &PathBuf, new_window: bool) -> Result<(), color_eyre::
     if new_window {
         command.arg("--new-window");
     }
-    command.args(["tmux", "new"]);
 
     if let Some(name) = path.file_name() {
-        command.arg("-s").arg(name);
+        if tmux_session_exists(&name.to_string_lossy())? {
+            command.args(["tmux", "a", "-t"]);
+            command.arg(name);
+        } else {
+            command.args(["tmux", "new", "-s"]);
+            command.arg(name);
+        }
     }
+
     let status = command.spawn()?.wait()?;
     if !status.success() {
         eprintln!("failed to spawn tab: {status}");
     };
 
     Ok(())
+}
+
+fn tmux_session_exists(session_name: &str) -> color_eyre::Result<bool> {
+    Ok(String::from_utf8(
+        Command::new("tmux")
+            .args(["ls", "-F", "#{session_name}"])
+            .output()?
+            .stdout,
+    ).wrap_err("expected tmux ls to output valid utf-8")?
+    .lines()
+    .any(|existing| session_name == existing.trim()))
 }
