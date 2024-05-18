@@ -50,7 +50,7 @@ fn main() -> color_eyre::Result<()> {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(err) => match err.kind() {
-            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => Cli::OpenTerm { new_window: false },
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => Cli::Open,
             _ => {
                 eprintln!("{err}");
                 std::process::exit(1);
