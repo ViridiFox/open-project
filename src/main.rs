@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs::File,
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     str::FromStr,
 };
@@ -22,7 +22,8 @@ const DATA_FILENAME: &str = "projects.json";
 /// currently: open a new wezterm tab and open `zellij -l=<layout>` inside it
 #[derive(Parser, Debug)]
 enum Cli {
-    Open {
+    Open,
+    OpenTerm {
         #[clap(short, long)]
         new_window: bool,
     },
@@ -49,7 +50,7 @@ fn main() -> color_eyre::Result<()> {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(err) => match err.kind() {
-            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => Cli::Open { new_window: false },
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => Cli::OpenTerm { new_window: false },
             _ => {
                 eprintln!("{err}");
                 std::process::exit(1);
@@ -73,7 +74,21 @@ fn main() -> color_eyre::Result<()> {
     let mut entries: VecDeque<Entry> = serde_json::from_reader(File::open(&entries_filepath)?)?;
 
     match cli {
-        Cli::Open { new_window } => {
+        Cli::Open => {
+            let entries = generate_expanded_entries(entries)?;
+
+            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+                .items(&entries)
+                .interact_opt()?
+                .unwrap_or_else(|| std::process::exit(1));
+
+            let selected_entry = &entries[selection];
+
+            open_tmux_session(&selected_entry.0)?;
+
+            Ok(())
+        }
+        Cli::OpenTerm { new_window } => {
             let entries = generate_expanded_entries(entries)?;
 
             let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
@@ -179,7 +194,7 @@ fn main() -> color_eyre::Result<()> {
     }
 }
 
-fn wezterm_open_path_in_tab(path: &PathBuf, new_window: bool) -> color_eyre::Result<()> {
+fn wezterm_open_path_in_tab(path: &Path, new_window: bool) -> color_eyre::Result<()> {
     let mut command = Command::new("wezterm");
     command
         .current_dir(path)
@@ -189,13 +204,14 @@ fn wezterm_open_path_in_tab(path: &PathBuf, new_window: bool) -> color_eyre::Res
     if new_window {
         command.arg("--new-window");
     }
+    command.arg("tmux");
 
     if let Some(name) = path.file_name() {
         if tmux_session_exists(&name.to_string_lossy())? {
-            command.args(["tmux", "a", "-t"]);
+            command.args(["a", "-t"]);
             command.arg(name);
         } else {
-            command.args(["tmux", "new", "-s"]);
+            command.args(["new", "-s"]);
             command.arg(name);
         }
     }
@@ -203,6 +219,27 @@ fn wezterm_open_path_in_tab(path: &PathBuf, new_window: bool) -> color_eyre::Res
     let status = command.spawn()?.wait()?;
     if !status.success() {
         eprintln!("failed to spawn tab: {status}");
+    };
+
+    Ok(())
+}
+
+fn open_tmux_session(path: &Path) -> color_eyre::Result<()> {
+    let mut command = Command::new("tmux");
+
+    if let Some(name) = path.file_name() {
+        if tmux_session_exists(&name.to_string_lossy())? {
+            command.args(["a", "-t"]);
+            command.arg(name);
+        } else {
+            command.args(["new", "-s"]);
+            command.arg(name);
+        }
+    }
+
+    let status = command.spawn()?.wait()?;
+    if !status.success() {
+        eprintln!("failed to open tmux session: {status}");
     };
 
     Ok(())
