@@ -234,6 +234,8 @@ fn open_tmux_session(path: &Path) -> color_eyre::Result<()> {
         } else {
             command.args(["new", "-s"]);
             command.arg(name);
+            command.arg("-c");
+            command.arg(path);
         }
     }
 
