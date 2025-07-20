@@ -19,7 +19,6 @@ mod entry;
 const DATA_FILENAME: &str = "projects.json";
 
 /// Cli to open projects easily easily without needing to care for the working directory
-/// currently: open a new wezterm tab and open `zellij -l=<layout>` inside it
 #[derive(Parser, Debug)]
 enum Cli {
     Open,
