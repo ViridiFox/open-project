@@ -20,6 +20,7 @@ const DATA_FILENAME: &str = "projects.json";
 
 /// Cli to open projects easily easily without needing to care for the working directory
 #[derive(Parser, Debug)]
+#[clap(version)]
 enum Cli {
     Open,
     OpenTerm {
@@ -83,6 +84,10 @@ fn main() -> color_eyre::Result<()> {
 
             let selected_entry = &entries[selection];
 
+            if let Some(name) = selected_entry.0.file_name() {
+                set_terminal_title(&name.to_string_lossy());
+                std::io::stderr().flush()?;
+            }
             open_tmux_session(&selected_entry.0)?;
 
             Ok(())
@@ -215,10 +220,25 @@ fn wezterm_open_path_in_tab(path: &Path, new_window: bool) -> color_eyre::Result
         }
     }
 
-    let status = command.spawn()?.wait()?;
-    if !status.success() {
-        eprintln!("failed to spawn tab: {status}");
-    };
+    let output = command.output()?;
+    if !output.status.success() {
+        eprintln!("failed to spawn tab: {}", output.status);
+        return Ok(());
+    }
+
+    if let Some(name) = path.file_name() {
+        let pane_id = String::from_utf8_lossy(&output.stdout);
+        let pane_id = pane_id.trim();
+        if !pane_id.is_empty() {
+            let status = Command::new("wezterm")
+                .args(["cli", "set-tab-title", "--pane-id", pane_id])
+                .arg(name)
+                .status()?;
+            if !status.success() {
+                eprintln!("failed to set tab title: {status}");
+            }
+        }
+    }
 
     Ok(())
 }
@@ -255,4 +275,8 @@ fn tmux_session_exists(session_name: &str) -> color_eyre::Result<bool> {
     ).wrap_err("expected tmux ls to output valid utf-8")?
     .lines()
     .any(|existing| session_name == existing.trim()))
+}
+
+fn set_terminal_title(title: &str) {
+    eprint!("\x1B]0;{}\x07", title);
 }
