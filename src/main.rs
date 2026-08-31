@@ -18,6 +18,34 @@ mod entry;
 
 const DATA_FILENAME: &str = "projects.json";
 
+#[derive(Debug, Clone, Copy, Default)]
+enum Multiplexer {
+    Tmux,
+    #[default]
+    Zellij,
+}
+
+impl FromStr for Multiplexer {
+    type Err = color_eyre::Report;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "tmux" => Ok(Multiplexer::Tmux),
+            "zellij" => Ok(Multiplexer::Zellij),
+            other => Err(eyre!(
+                "unknown multiplexer `{other}`; expected `tmux` or `zellij`"
+            )),
+        }
+    }
+}
+
+fn multiplexer() -> color_eyre::Result<Multiplexer> {
+    match std::env::var("OPEN_PROJECT_MULTIPLEXER") {
+        Ok(val) => val.parse(),
+        Err(_) => Ok(Multiplexer::default()),
+    }
+}
+
 /// Cli to open projects easily easily without needing to care for the working directory
 #[derive(Parser, Debug)]
 #[clap(version)]
@@ -34,6 +62,10 @@ enum Cli {
     List,
     Add {
         path: PathBuf,
+
+        /// zellij layout to use when opening this entry (default: "project")
+        #[clap(short, long)]
+        zellij_layout: Option<String>,
 
         /// add it to the start of the list, giving it a higher priority
         #[clap(short, long)]
@@ -84,11 +116,15 @@ fn main() -> color_eyre::Result<()> {
 
             let selected_entry = &entries[selection];
 
-            if let Some(name) = selected_entry.0.file_name() {
+            if let Some(name) = selected_entry.path.file_name() {
                 set_terminal_title(&name.to_string_lossy());
                 std::io::stderr().flush()?;
             }
-            open_tmux_session(&selected_entry.0)?;
+
+            match multiplexer()? {
+                Multiplexer::Tmux => open_tmux_session(&selected_entry.path)?,
+                Multiplexer::Zellij => open_zellij_session(&selected_entry.path, selected_entry.zellij_layout())?,
+            }
 
             Ok(())
         }
@@ -102,7 +138,7 @@ fn main() -> color_eyre::Result<()> {
 
             let selected_entry = &entries[selection];
 
-            wezterm_open_path_in_tab(&selected_entry.0, new_window)?;
+            wezterm_open_path_in_tab(selected_entry, new_window)?;
 
             Ok(())
         }
@@ -153,7 +189,7 @@ fn main() -> color_eyre::Result<()> {
                 .get(selected_str)
                 .ok_or(eyre!("unknown entry (`{selected_str}`) got selected"))?;
 
-            wezterm_open_path_in_tab(&selected_entry.0, new_window)?;
+            wezterm_open_path_in_tab(selected_entry, new_window)?;
 
             Ok(())
         }
@@ -161,15 +197,16 @@ fn main() -> color_eyre::Result<()> {
             println!("{}", serde_json::to_string_pretty(&entries)?);
             Ok(())
         }
-        Cli::Add { path, prepend } => {
+        Cli::Add { path, zellij_layout, prepend } => {
             let path = PathBuf::from_str(&shellexpand::tilde(
                 path.to_str().ok_or(eyre!("expected valid utf-8 path"))?,
             ))?;
 
+            let entry = Entry { path, zellij_layout };
             if prepend {
-                entries.push_front(Entry(path));
+                entries.push_front(entry);
             } else {
-                entries.push_back(Entry(path));
+                entries.push_back(entry);
             }
 
             serde_json::to_writer_pretty(File::create(&entries_filepath)?, &entries)?;
@@ -178,7 +215,7 @@ fn main() -> color_eyre::Result<()> {
         }
         Cli::Remove { path } => {
             if let Some(path) = path {
-                entries.retain(|entry| *entry.0 != path);
+                entries.retain(|entry| entry.path != path);
             } else {
                 let mut selected_entries = MultiSelect::with_theme(&ColorfulTheme::default())
                     .items(entries.make_contiguous())
@@ -198,7 +235,8 @@ fn main() -> color_eyre::Result<()> {
     }
 }
 
-fn wezterm_open_path_in_tab(path: &Path, new_window: bool) -> color_eyre::Result<()> {
+fn wezterm_open_path_in_tab(entry: &Entry, new_window: bool) -> color_eyre::Result<()> {
+    let path = &entry.path;
     let mut command = Command::new("wezterm");
     command
         .current_dir(path)
@@ -208,15 +246,30 @@ fn wezterm_open_path_in_tab(path: &Path, new_window: bool) -> color_eyre::Result
     if new_window {
         command.arg("--new-window");
     }
-    command.arg("tmux");
 
-    if let Some(name) = path.file_name() {
-        if tmux_session_exists(&name.to_string_lossy())? {
-            command.args(["a", "-t"]);
-            command.arg(name);
-        } else {
-            command.args(["new", "-s"]);
-            command.arg(name);
+    match multiplexer()? {
+        Multiplexer::Tmux => {
+            command.arg("tmux");
+            if let Some(name) = path.file_name() {
+                if tmux_session_exists(&name.to_string_lossy())? {
+                    command.args(["a", "-t"]);
+                    command.arg(name);
+                } else {
+                    command.args(["new", "-s"]);
+                    command.arg(name);
+                }
+            }
+        }
+        Multiplexer::Zellij => {
+            command.arg("zellij");
+            if let Some(name) = path.file_name() {
+                if zellij_session_exists(&name.to_string_lossy())? {
+                    command.args(["attach", &name.to_string_lossy()]);
+                } else {
+                    command.args(["-s", &name.to_string_lossy()]);
+                    command.args(["-n", entry.zellij_layout()]);
+                }
+            }
         }
     }
 
@@ -272,9 +325,45 @@ fn tmux_session_exists(session_name: &str) -> color_eyre::Result<bool> {
             .args(["ls", "-F", "#{session_name}"])
             .output()?
             .stdout,
-    ).wrap_err("expected tmux ls to output valid utf-8")?
+    )
+    .wrap_err("expected tmux ls to output valid utf-8")?
     .lines()
     .any(|existing| session_name == existing.trim()))
+}
+
+fn open_zellij_session(path: &Path, layout: &str) -> color_eyre::Result<()> {
+    let mut command = Command::new("zellij");
+    command.current_dir(path);
+
+    if let Some(name) = path.file_name() {
+        if zellij_session_exists(&name.to_string_lossy())? {
+            command.arg("attach");
+            command.arg(name);
+        } else {
+            command.args(["-s", &name.to_string_lossy()]);
+            command.args(["-n", layout]);
+        }
+    }
+
+    let status = command.spawn()?.wait()?;
+    if !status.success() {
+        eprintln!("failed to open zellij session: {status}");
+    }
+
+    Ok(())
+}
+
+fn zellij_session_exists(session_name: &str) -> color_eyre::Result<bool> {
+    let current = std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_default();
+    Ok(String::from_utf8(
+        Command::new("zellij")
+            .args(["ls", "-s"])
+            .output()?
+            .stdout,
+    )
+    .wrap_err("expected zellij ls to output valid utf-8")?
+    .lines()
+    .any(|line| line.trim() == session_name && line.trim() != current))
 }
 
 fn set_terminal_title(title: &str) {

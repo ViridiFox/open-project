@@ -5,21 +5,55 @@ use std::{
 };
 
 use color_eyre::eyre::eyre;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct Entry(pub PathBuf);
+const DEFAULT_ZELLIJ_LAYOUT: &str = "project";
+
+#[derive(Serialize, Clone, PartialEq, Debug)]
+pub struct Entry {
+    pub path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zellij_layout: Option<String>,
+}
 
 impl Entry {
+    pub fn zellij_layout(&self) -> &str {
+        self.zellij_layout
+            .as_deref()
+            .unwrap_or(DEFAULT_ZELLIJ_LAYOUT)
+    }
+
     fn with_path(mut self, path: PathBuf) -> Entry {
-        self.0 = path;
+        self.path = path;
         self
+    }
+}
+
+impl<'de> Deserialize<'de> for Entry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            JustPath(PathBuf),
+            Full {
+                path: PathBuf,
+                zellij_layout: Option<String>,
+            },
+        }
+
+        match Raw::deserialize(deserializer)? {
+            Raw::JustPath(path) => Ok(Entry {
+                path,
+                zellij_layout: None,
+            }),
+            Raw::Full { path, zellij_layout } => Ok(Entry { path, zellij_layout }),
+        }
     }
 }
 
 impl Display for Entry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
+        write!(f, "{:?}", self.path)
     }
 }
 
@@ -30,9 +64,9 @@ pub fn generate_expanded_entries(entries: VecDeque<Entry>) -> color_eyre::Result
 
     for entry in entries {
         let path = entry
-            .0
+            .path
             .to_str()
-            .ok_or(eyre!("path '{:?}' is not valid utf-8", entry.0))?;
+            .ok_or(eyre!("path '{:?}' is not valid utf-8", entry.path))?;
         let paths = glob::glob(path)?;
 
         for path in paths.filter_map(Result::ok) {
