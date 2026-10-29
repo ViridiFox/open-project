@@ -17,6 +17,14 @@ use crate::entry::generate_expanded_entries;
 mod entry;
 
 const DATA_FILENAME: &str = "projects.json";
+const MAX_SESSION_NAME_LEN: usize = 24;
+
+/// Derives a tmux/zellij session name from a path's file name, trimmed to
+/// `MAX_SESSION_NAME_LEN` characters.
+fn session_name_for_path(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().chars().take(MAX_SESSION_NAME_LEN).collect())
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 enum Multiplexer {
@@ -250,23 +258,23 @@ fn wezterm_open_path_in_tab(entry: &Entry, new_window: bool) -> color_eyre::Resu
     match multiplexer()? {
         Multiplexer::Tmux => {
             command.arg("tmux");
-            if let Some(name) = path.file_name() {
-                if tmux_session_exists(&name.to_string_lossy())? {
+            if let Some(name) = session_name_for_path(path) {
+                if tmux_session_exists(&name)? {
                     command.args(["a", "-t"]);
-                    command.arg(name);
+                    command.arg(&name);
                 } else {
                     command.args(["new", "-s"]);
-                    command.arg(name);
+                    command.arg(&name);
                 }
             }
         }
         Multiplexer::Zellij => {
             command.arg("zellij");
-            if let Some(name) = path.file_name() {
-                if zellij_session_exists(&name.to_string_lossy())? {
-                    command.args(["attach", &name.to_string_lossy()]);
+            if let Some(name) = session_name_for_path(path) {
+                if zellij_session_exists(&name)? {
+                    command.args(["attach", &name]);
                 } else {
-                    command.args(["-s", &name.to_string_lossy()]);
+                    command.args(["-s", &name]);
                     command.args(["-n", entry.zellij_layout()]);
                 }
             }
@@ -299,13 +307,13 @@ fn wezterm_open_path_in_tab(entry: &Entry, new_window: bool) -> color_eyre::Resu
 fn open_tmux_session(path: &Path) -> color_eyre::Result<()> {
     let mut command = Command::new("tmux");
 
-    if let Some(name) = path.file_name() {
-        if tmux_session_exists(&name.to_string_lossy())? {
+    if let Some(name) = session_name_for_path(path) {
+        if tmux_session_exists(&name)? {
             command.args(["a", "-t"]);
-            command.arg(name);
+            command.arg(&name);
         } else {
             command.args(["new", "-s"]);
-            command.arg(name);
+            command.arg(&name);
             command.arg("-c");
             command.arg(path);
         }
@@ -335,12 +343,12 @@ fn open_zellij_session(path: &Path, layout: &str) -> color_eyre::Result<()> {
     let mut command = Command::new("zellij");
     command.current_dir(path);
 
-    if let Some(name) = path.file_name() {
-        if zellij_session_exists(&name.to_string_lossy())? {
+    if let Some(name) = session_name_for_path(path) {
+        if zellij_session_exists(&name)? {
             command.arg("attach");
-            command.arg(name);
+            command.arg(&name);
         } else {
-            command.args(["-s", &name.to_string_lossy()]);
+            command.args(["-s", &name]);
             command.args(["-n", layout]);
         }
     }
